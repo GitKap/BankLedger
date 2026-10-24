@@ -1,5 +1,6 @@
 # A tag like v1.2.0 builds the Windows poster (PyInstaller, so no Python needed) and a ZIP of the
-# addon whose top folder is BankLedger/, and attaches both to a GitHub release.
+# addon whose top folder is BankLedger/, and attaches both to a GitHub release together with
+# SHA256SUMS.txt and a build provenance attestation (gh attestation verify <file> --repo GitKap/BankLedger).
 # A tag with a dash (v1.2.0-rc1) makes a pre-release.
 name: release
 
@@ -9,6 +10,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -29,9 +32,25 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path BankLedger -DestinationPath BankLedger-addon.zip
 
+      - name: SHA256 sums
+        shell: pwsh
+        run: |
+          $lines = foreach ($f in "dist/BankLedgerPoster.exe", "BankLedger-addon.zip") {
+            "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower(), (Split-Path $f -Leaf)
+          }
+          [IO.File]::WriteAllText("SHA256SUMS.txt", ($lines -join "`n") + "`n")
+          Get-Content SHA256SUMS.txt
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/BankLedgerPoster.exe
+            BankLedger-addon.zip
+
       - uses: softprops/action-gh-release@v2
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             dist/BankLedgerPoster.exe
             BankLedger-addon.zip
+            SHA256SUMS.txt

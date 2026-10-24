@@ -1,8 +1,12 @@
 # BankLedger
 
-WoW 1.12 (Kronos) addon for a guild bank alt. It reads bags, bank and mailbox and writes the stock as
+WoW addon for a guild bank alt on Kronos. It reads bags, bank and mailbox and writes the stock as
 Discord-ready text, one page per category, each under Discord's 2000 character limit. It also keeps a
 ledger of mail and trades, so it can list what is new since the last post and who donated.
+
+**Works in both clients:** the original **1.12** client and the **1.14 Classic Era** client (Kronos through
+HermesProxy). It is the same download and the same folder for both, tested in game on both. It needs no
+other addons.
 
 In game: click the bag button on the minimap (with pfUI it sits in pfUI's button bar under the minimap).
 Each page is already selected, so it's Ctrl+C and paste; the tick boxes replace the commands.
@@ -17,7 +21,8 @@ What the pages look like once pasted into Discord (with `/bl links on`, item nam
 
 1. Download `BankLedger-addon.zip` from the [latest release](https://github.com/GitKap/BankLedger/releases/latest)
    and unpack it into `Interface/AddOns`, so you get `Interface/AddOns/BankLedger/BankLedger.toc`.
-   Restart the game (a /reload does not load new addons).
+   For the 1.14 client that is `World of Warcraft/_classic_era_/Interface/AddOns`. Restart the game
+   (a /reload does not load new addons).
 2. Log in on the bank alt. Open the bank once and the mailbox once, so both are scanned.
 3. Click the bag button on the minimap (or type `/bl`) to open the report. Each page is selected already: Ctrl+C, then paste it into that category's
    Discord message (edit the message). Use `< Prev` / `Next >` to move between pages. The tick boxes under
@@ -49,10 +54,14 @@ Other, Gold, New in the guild bank, and an officer-only Ledger.
 ## Notes
 
 - Soulbound items and the Hearthstone are never listed.
-- Items still in the mailbox are counted. Without an item link (1.12 mail), an item the alt has never had in
-  its bags lands in Other, unless its tooltip shows a recipe skill.
+- Items still in the mailbox are counted. 1.12 mail has no item links: an item the alt has never had in its
+  bags is looked up by name in pfQuest when it is installed, otherwise it lands in Other unless its tooltip
+  shows a recipe skill. The 1.14 client links every attachment (up to 12 per mail).
+- 1.12 reads `BankLedger.toc`, 1.14 reads `BankLedger_Vanilla.toc`; both load the same Lua file, which is
+  written in Lua 5.0 and switches API details by client version.
 - SavedVariables (`BankLedgerDB`) also store the rendered pages at logout, for a later Discord webhook poster.
-- Tests: `.venv/bin/python tests/sim.py [--print] [--dump pages.json]` runs the addon against a stubbed 1.12 API (`python3 -m venv .venv && .venv/bin/pip install lupa`).
+- Tests: `.venv/bin/python tests/sim.py [--print] [--dump pages.json]` runs the addon against a stubbed 1.12 API
+  and a stubbed 1.14 API on Lua 5.1 (`python3 -m venv .venv && .venv/bin/pip install lupa`).
 
 ## Discord webhook poster (optional)
 
@@ -88,4 +97,16 @@ Running it all the time (Linux, systemd user service, as on my machine):
 
 The script needs only the Python 3 standard library (Windows too). It runs where the game's `WTF` folder is,
 so for a guild it has to run on the bank alt's computer; point it at the game with
-`--wow "C:\Games\WoW 1.12"` (or `BANKLEDGER_WOW`).
+`--wow "C:\Games\WoW 1.12"` (or `BANKLEDGER_WOW`). For the 1.14 client point it at the `World of Warcraft`
+folder (or `_classic_era_`); it finds `_classic_era_/WTF` itself. If the same character has data from both
+clients, the newer save is posted.
+
+## Checking a download
+
+Every release has `SHA256SUMS.txt` and a GitHub build attestation, which proves that the exe and the zip
+were built by this repository's GitHub Actions from the tagged commit, not uploaded by hand.
+
+- Checksums: `sha256sum -c SHA256SUMS.txt` (Linux), or on Windows `Get-FileHash BankLedgerPoster.exe`
+  in PowerShell and compare with the file.
+- Attestation (needs the [GitHub CLI](https://cli.github.com)):
+  `gh attestation verify BankLedgerPoster.exe --repo GitKap/BankLedger`

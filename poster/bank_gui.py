@@ -148,7 +148,7 @@ class App:
         self.wow = tk.StringVar(value=self.cfg.get("wow") or bp.WOW)
         ttk.Entry(game, textvariable=self.wow).grid(row=0, column=0, sticky="ew", padx=(0, 8))
         ttk.Button(game, text="Browse...", command=self.browse).grid(row=0, column=1)
-        ttk.Label(game, text="The folder with WoW.exe and the WTF folder.", foreground=muted).grid(
+        ttk.Label(game, text="The folder with WoW.exe and WTF (1.14 client: World of Warcraft or _classic_era_).", foreground=muted).grid(
             row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         disc = ttk.LabelFrame(outer, text=" 2. Discord webhook ", padding=10)
@@ -217,7 +217,7 @@ class App:
         self.root.after(150, self.pump)
 
     def browse(self):
-        d = filedialog.askdirectory(title="Folder that contains WoW.exe and WTF", initialdir=self.wow.get() or None)
+        d = filedialog.askdirectory(title="WoW folder (with WTF, or World of Warcraft for 1.14)", initialdir=self.wow.get() or None)
         if d:
             self.wow.set(d)
             self.refresh()
@@ -236,7 +236,7 @@ class App:
             w.destroy()
         self.char_vars = {}
         wow = self.wow.get().strip()
-        if not wow or not os.path.isdir(os.path.join(wow, "WTF")):
+        if not wow or not bp.has_wtf(wow):
             ttk.Label(self.char_frame, text="Pick the WoW folder (the one with a WTF folder in it).").pack(anchor="w")
             return
         bp.WOW = wow

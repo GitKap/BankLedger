@@ -3,12 +3,23 @@
 -- the mailbox whenever it is open. Taking mail, sending mail and finished trades go into an
 -- in/out ledger, so the report can thank donors and show what is new since the last post.
 -- /bl opens the report: one page per category, each under Discord's 2000 character limit.
--- Lua 5.0 (WoW 1.12): no # operator, no % operator, no string methods, varargs via arg.
+-- One file for two clients. 1.12 runs Lua 5.0: no # operator, no % operator, no string methods,
+-- no ..., handlers read the globals this/event/arg1. 1.14 (Classic Era, e.g. through HermesProxy)
+-- runs Lua 5.1 and the newer API: handlers get arguments, GetItemInfo returns item level first,
+-- links have more fields, mail holds up to 12 attachments. The code below sticks to Lua 5.0.
 
-local VERSION = 2         -- bump to re-read cached item tooltips
+local VERSION = 3         -- bump to re-read cached item tooltips
 local LIMIT = 1900        -- characters per page; Discord allows 2000 per message
 local LOG_MAX = 500
 local TAKE_TIMEOUT = 10   -- seconds to see a taken mail attachment arrive in the bags
+
+local _, _, _, TOC = GetBuildInfo()   -- 1.12 returns no interface number
+local MODERN = (TOC or 0) >= 11300
+local fmod = math.mod or math.fmod
+local _G = _G or getfenv(0)             -- the 1.12 client has no _G
+local G = getglobal or function(n) return _G[n] end
+local MAIL_ATTACH = MODERN and (ATTACHMENTS_MAX_RECEIVE or 12) or 1
+local SEND_ATTACH = MODERN and (ATTACHMENTS_MAX_SEND or 12) or 1
 
 local ORDER = {
   "TRADE GOODS", "WEAPONS & ARMOR",
@@ -79,11 +90,17 @@ local function say(msg)
   DEFAULT_CHAT_FRAME:AddMessage("|cffe0b050BankLedger:|r " .. msg)
 end
 
+-- "72g 85s", "5s 3c", "1c"; copper only for amounts under a gold
 local function money(c)
   local g = math.floor(c / 10000)
-  local s = math.floor(math.mod(c, 10000) / 100)
-  if s > 0 then return g .. "g " .. s .. "s" end
-  return g .. "g"
+  local s = math.floor(fmod(c, 10000) / 100)
+  local cp = math.floor(fmod(c, 100))
+  local out = {}
+  if g > 0 then table.insert(out, g .. "g") end
+  if s > 0 then table.insert(out, s .. "s") end
+  if cp > 0 and g == 0 then table.insert(out, cp .. "c") end
+  if table.getn(out) == 0 then return "0g" end
+  return table.concat(out, " ")
 end
 
 local function joinAnd(list)
@@ -95,12 +112,24 @@ local function joinAnd(list)
   return table.concat(head, ", ") .. " and " .. list[n]
 end
 
--- "|cff...|Hitem:2589:0:0:0|h[Linen Cloth]|h|r" -> key "2589:0" (id:random suffix), id, name
+-- 1.12 "|Hitem:2589:0:0:0|h[Linen Cloth]|h"          id:enchant:suffix:unique
+-- 1.14 "|Hitem:2589::::::::60:::::|h[Linen Cloth]|h"  id:enchant:4 gems:suffix:..., empty = 0
+-- -> key "2589:0" (id:random suffix), id, name
+local SUFFIX_FIELD = MODERN and 7 or 3
 local function parseLink(link)
   if not link then return end
-  local _, _, id, suffix, name = string.find(link, "item:(%d+):%d+:(%d+):%d+|h%[(.-)%]|h")
-  if not id then return end
-  return id .. ":" .. suffix, id, name
+  local _, _, fields, name = string.find(link, "item:([%-%d:]*)|h%[(.-)%]|h")
+  if not fields then return end
+  local f, pos = {}, 1
+  while true do
+    local s = string.find(fields, ":", pos, true)
+    table.insert(f, string.sub(fields, pos, (s or 0) - 1))
+    if not s then break end
+    pos = s + 1
+  end
+  local id = f[1]
+  if not id or id == "" then return end
+  return id .. ":" .. (tonumber(f[SUFFIX_FIELD] or "") or 0), id, name
 end
 
 local function idOf(key)
@@ -115,7 +144,7 @@ local function tipLines(set)
   set()
   local out = {}
   for i = 1, tip:NumLines() do
-    local fs = getglobal("BankLedgerTipTextLeft" .. i)
+    local fs = G("BankLedgerTipTextLeft" .. i)
     local t = fs and fs:GetText()
     if t then table.insert(out, t) end
   end
@@ -165,26 +194,35 @@ local function isBound(lines)
   end
 end
 
+-- quality, type, subtype and slot; 1.14 may not have the item yet (GET_ITEM_INFO_RECEIVED follows)
+local function itemType(info, key)
+  local id = idOf(key)
+  if not id then return end
+  local iname, q, itype, isub, loc, _
+  if MODERN then
+    iname, _, q, _, _, itype, isub, _, loc = GetItemInfo(tonumber(id))
+  else
+    local _, _, suffix = string.find(key, ":(%d+)$")
+    iname, _, q, _, itype, isub, _, loc = GetItemInfo("item:" .. id .. ":0:" .. (suffix or "0") .. ":0")
+  end
+  if iname then
+    info.q, info.t, info.st, info.loc = q, itype, isub, loc
+    if itype == "Recipe" then info.recipe = true end
+  end
+end
+
 -- item facts, cached account-wide by key; `lines` is the tooltip of one copy of the item
 local function itemInfo(key, name, lines)
   local info = db.info[key]
   if info and info.t then return info end
   info = { n = name }
-  local id = idOf(key)
-  if id then
-    local _, _, suffix = string.find(key, ":(%d+)$")
-    local iname, _, q, _, itype, isub, _, loc = GetItemInfo("item:" .. id .. ":0:" .. (suffix or "0") .. ":0")
-    if iname then
-      info.q, info.t, info.st, info.loc = q, itype, isub, loc
-    end
-  end
+  itemType(info, key)
   for _, p in ipairs(RECIPE_PREFIX) do
     if string.find(name, p, 1, true) == 1 then info.recipe = true end
   end
-  if info.t == "Recipe" then info.recipe = true end
   if lines then readTip(info, lines) end
   db.info[key] = info
-  if name and string.find(key, "^%d+:%d+$") then db.byName[name] = key end
+  if name and string.find(key, "^%d+:%-?%d+$") then db.byName[name] = key end
   return info
 end
 
@@ -248,9 +286,20 @@ local function idByName(name)
   return pfIndex[name]
 end
 
-local function mailKey(i, name)
+-- name and count of attachment a of mail i; 1.12 mail has one attachment and no item id
+local function inboxItem(i, a)
+  if MODERN then
+    local name, _, _, count = GetInboxItem(i, a)
+    return name, count
+  end
+  if a > 1 then return end
+  local name, _, count = GetInboxItem(i)
+  return name, count
+end
+
+local function mailKey(i, a, name)
   if GetInboxItemLink then
-    local ok, link = pcall(GetInboxItemLink, i, 1)
+    local ok, link = pcall(GetInboxItemLink, i, a)
     local key = ok and parseLink(link)
     if key then return key end
   end
@@ -272,20 +321,24 @@ local function scanMail()
   for i = 1, n do
     local _, _, _, _, m, cod, days, hasItem = GetInboxHeaderInfo(i)
     if (m or 0) > 0 then gold = gold + m end
-    local name, _, count = GetInboxItem(i)
-    if hasItem and name then
-      if days and days < 3 then expiring = expiring + 1 end
-      if not cod or cod == 0 then
-        local key = mailKey(i, name)
-        if not db.info[key] then
-          local idx = i
-          itemInfo(key, name, tipLines(function() tip:SetInboxItem(idx) end))
+    local any = false
+    for a = 1, hasItem and MAIL_ATTACH or 0 do
+      local name, count = inboxItem(i, a)
+      if name then
+        any = true
+        if not cod or cod == 0 then
+          local key = mailKey(i, a, name)
+          if not db.info[key] then
+            local idx, att = i, a
+            itemInfo(key, name, tipLines(function() tip:SetInboxItem(idx, att) end))
+          end
+          local e = t[key] or { n = name, c = 0 }
+          e.c = e.c + (count or 1)
+          t[key] = e
         end
-        local e = t[key] or { n = name, c = 0 }
-        e.c = e.c + (count or 1)
-        t[key] = e
       end
     end
+    if any and days and days < 3 then expiring = expiring + 1 end
   end
   cdb.mail, cdb.mailGold, cdb.mailN, cdb.mailExpiring, cdb.mailT = t, gold, n, expiring, time()
 end
@@ -325,41 +378,58 @@ local function checkTakes()
   takes = keep
 end
 
-local origTakeItem = TakeInboxItem
-TakeInboxItem = function(a1, a2)
+-- runs fn with the call's arguments; 1.14 has hooksecurefunc (no taint), 1.12 gets a wrapper.
+-- Either way the mail and the send slots are still unchanged while fn runs.
+local function hook(name, fn)
+  if hooksecurefunc then
+    hooksecurefunc(name, fn)
+    return
+  end
+  local orig = G(name)
+  _G[name] = function(a1, a2, a3)
+    fn(a1, a2, a3)
+    return orig(a1, a2, a3)
+  end
+end
+
+hook("TakeInboxItem", function(i, a)
   if cdb and not cdb.off then
-    local _, _, sender = GetInboxHeaderInfo(a1)
-    local name, _, count = GetInboxItem(a1)
+    local _, _, sender = GetInboxHeaderInfo(i)
+    local name, count = inboxItem(i, a or 1)
     if name then
       table.insert(takes, { who = sender, n = name, c = count or 1, before = countInBags(name), at = GetTime() })
     end
   end
-  return origTakeItem(a1, a2)
-end
+end)
 
-local origTakeMoney = TakeInboxMoney
-TakeInboxMoney = function(a1)
+hook("TakeInboxMoney", function(i)
   if cdb and not cdb.off then
-    local _, _, sender, _, m = GetInboxHeaderInfo(a1)
+    local _, _, sender, _, m = GetInboxHeaderInfo(i)
     if m and m > 0 then moneyTake = { who = sender, m = m, before = GetMoney() } end
   end
-  return origTakeMoney(a1)
+end)
+
+local function sendItems()
+  local out = {}
+  for a = 1, SEND_ATTACH do
+    local name, count, _
+    if MODERN then name, _, _, count = GetSendMailItem(a) else name, _, count = GetSendMailItem() end
+    if name then table.insert(out, { n = name, c = count or 1 }) end
+  end
+  return out
 end
 
-local origSendMail = SendMail
-SendMail = function(to, subject, body)
+hook("SendMail", function(to)
   if cdb and not cdb.off then
-    local name, _, count = GetSendMailItem()
-    sendMail = { who = to, n = name, c = count, m = GetSendMailMoney(), at = GetTime() }
+    sendMail = { who = to, items = sendItems(), m = GetSendMailMoney(), at = GetTime() }
   end
-  return origSendMail(to, subject, body)
-end
+end)
 
 local function commitSend()
   if not sendMail then return end
   local p = sendMail
   sendMail = nil
-  if p.n then log("OUT", "mail", p.who, p.n, p.c or 1) end
+  for _, e in ipairs(p.items) do log("OUT", "mail", p.who, e.n, e.c) end
   if p.m and p.m > 0 then log("OUT", "mail", p.who, nil, nil, p.m) end
 end
 
@@ -625,6 +695,7 @@ local function buildPages(c)
   local byCat = {}
   for key, e in pairs(all) do
     local info = db.info[key] or { n = e.n }
+    if not info.t then itemType(info, key) end   -- not known yet when the item was scanned
     local cat = category(key, info)
     byCat[cat] = byCat[cat] or {}
     local g = cat == "WEAPONS & ARMOR" and gearGroup(info) or ""
@@ -705,9 +776,9 @@ local function checkbox(name, text, x, get, set)
   local label = win:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   label:SetPoint("LEFT", cb, "RIGHT", 0, 1)
   label:SetText(text)
-  cb:SetScript("OnShow", function() this:SetChecked(get()) end)
+  cb:SetScript("OnShow", function() cb:SetChecked(get()) end)
   cb:SetScript("OnClick", function()
-    set(this:GetChecked() and true or false)
+    set(cb:GetChecked() and true or false)
     pages = buildPages()
     showPage()
   end)
@@ -716,7 +787,8 @@ local function checkbox(name, text, x, get, set)
 end
 
 local function makeWindow()
-  win = CreateFrame("Frame", "BankLedgerWindow", UIParent)
+  -- 1.14 frames only get SetBackdrop from BackdropTemplate
+  win = CreateFrame("Frame", "BankLedgerWindow", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
   win:SetWidth(620)
   win:SetHeight(500)
   win:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
@@ -730,8 +802,8 @@ local function makeWindow()
   win:EnableMouse(true)
   win:SetMovable(true)
   win:RegisterForDrag("LeftButton")
-  win:SetScript("OnDragStart", function() this:StartMoving() end)
-  win:SetScript("OnDragStop", function() this:StopMovingOrSizing() end)
+  win:SetScript("OnDragStart", function() win:StartMoving() end)
+  win:SetScript("OnDragStop", function() win:StopMovingOrSizing() end)
   table.insert(UISpecialFrames, "BankLedgerWindow")
 
   titleText = win:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -755,17 +827,20 @@ local function makeWindow()
   edit:SetWidth(550)
   edit:SetHeight(360)
   edit.cursorOffset, edit.cursorHeight = 0, 0
-  edit:SetScript("OnEscapePressed", function() this:ClearFocus() win:Hide() end)
+  edit:SetScript("OnEscapePressed", function() edit:ClearFocus() win:Hide() end)
   -- read-only: put the page back if a key press changed it
   edit:SetScript("OnTextChanged", function()
-    if shown and this:GetText() ~= shown then
-      this:SetText(shown)
-      this:HighlightText()
+    if shown and edit:GetText() ~= shown then
+      edit:SetText(shown)
+      edit:HighlightText()
     end
-    scroll:UpdateScrollChildRect()
+    if scroll.UpdateScrollChildRect then scroll:UpdateScrollChildRect() end
   end)
   if ScrollingEdit_OnCursorChanged then
-    edit:SetScript("OnCursorChanged", function() ScrollingEdit_OnCursorChanged(arg1, arg2, arg3, arg4) end)
+    edit:SetScript("OnCursorChanged", function(self, x, y, w, h)
+      if self then ScrollingEdit_OnCursorChanged(self, x, y, w, h)       -- 1.14
+      else ScrollingEdit_OnCursorChanged(arg1, arg2, arg3, arg4) end      -- 1.12
+    end)
   end
   if ScrollingEdit_OnUpdate then edit:SetScript("OnUpdate", ScrollingEdit_OnUpdate) end
   scroll:SetScrollChild(edit)
@@ -841,7 +916,7 @@ local function makeMinimapButton()
     if win and win:IsVisible() then win:Hide() else openReport() end
   end)
   mmButton:SetScript("OnDragStart", function()
-    this:SetScript("OnUpdate", function()
+    mmButton:SetScript("OnUpdate", function()
       local mx, my = Minimap:GetCenter()
       local px, py = GetCursorPosition()
       local sc = Minimap:GetEffectiveScale()
@@ -849,9 +924,9 @@ local function makeMinimapButton()
       placeMinimapButton()
     end)
   end)
-  mmButton:SetScript("OnDragStop", function() this:SetScript("OnUpdate", nil) end)
+  mmButton:SetScript("OnDragStop", function() mmButton:SetScript("OnUpdate", nil) end)
   mmButton:SetScript("OnEnter", function()
-    GameTooltip:SetOwner(this, "ANCHOR_LEFT")
+    GameTooltip:SetOwner(mmButton, "ANCHOR_LEFT")
     GameTooltip:AddLine("BankLedger")
     GameTooltip:AddLine("Click: bank pages for Discord", 1, 1, 1)
     GameTooltip:AddLine("Drag: move this button", 1, 1, 1)
@@ -879,18 +954,19 @@ local function rescan()
 end
 
 local tick = 0
-ev:SetScript("OnUpdate", function()
-  tick = tick + arg1
+ev:SetScript("OnUpdate", function(_, elapsed)
+  elapsed = elapsed or arg1
+  tick = tick + elapsed
   if tick >= 0.5 then
     tick = 0
     if table.getn(takes) > 0 then checkTakes() end
     if sendMail and GetTime() - sendMail.at > 5 then
       -- no MAIL_SEND_SUCCESS: trust the send if the attachment slot has been cleared
-      if not GetSendMailItem() then commitSend() else sendMail = nil end
+      if table.getn(sendItems()) == 0 then commitSend() else sendMail = nil end
     end
   end
   if not (dirty.bags or dirty.bank or dirty.mail) then return end
-  wait = wait - arg1
+  wait = wait - elapsed
   if wait <= 0 and cdb and not cdb.off then rescan() end
 end)
 
@@ -917,8 +993,10 @@ ev:RegisterEvent("TRADE_TARGET_ITEM_CHANGED")
 ev:RegisterEvent("TRADE_MONEY_CHANGED")
 ev:RegisterEvent("TRADE_ACCEPT_UPDATE")
 ev:RegisterEvent("UI_INFO_MESSAGE")
+if MODERN then ev:RegisterEvent("GET_ITEM_INFO_RECEIVED") end
 
-ev:SetScript("OnEvent", function()
+ev:SetScript("OnEvent", function(_, event, a1, a2)
+  if not event then event, a1, a2 = G("event"), arg1, arg2 end   -- 1.12 passes nothing
   if event == "PLAYER_LOGIN" then
     BankLedgerDB = BankLedgerDB or {}
     db = BankLedgerDB
@@ -937,6 +1015,8 @@ ev:SetScript("OnEvent", function()
     cdb.log = cdb.log or {}
     makeMinimapButton()
     mark("bags")
+    -- right after login 1.14 tooltips can still lack equip effects and skill names
+    if MODERN then wait = 3 end
     return
   end
   if not cdb or cdb.off then return end
@@ -946,7 +1026,7 @@ ev:SetScript("OnEvent", function()
     for _, p in ipairs(buildPages()) do table.insert(texts, p.text) end
     cdb.pages, cdb.pagesT = texts, time()
   elseif event == "BAG_UPDATE" then
-    if arg1 and (arg1 < 0 or arg1 > 4) then mark("bank") else mark("bags") end
+    if a1 and (a1 < 0 or a1 > 4) then mark("bank") else mark("bags") end
     if bankOpen then mark("bank") end
   elseif event == "PLAYER_MONEY" then
     if moneyTake and GetMoney() > moneyTake.before then
@@ -986,7 +1066,15 @@ ev:SetScript("OnEvent", function()
       or event == "TRADE_MONEY_CHANGED" or event == "TRADE_ACCEPT_UPDATE" then
     snapTrade()
   elseif event == "UI_INFO_MESSAGE" then
-    if arg1 == (ERR_TRADE_COMPLETE or "Trade complete.") then commitTrade() end
+    -- 1.12: (message); 1.14: (message type, message)
+    local done = ERR_TRADE_COMPLETE or "Trade complete."
+    if a1 == done or a2 == done then commitTrade() end
+  elseif event == "GET_ITEM_INFO_RECEIVED" then
+    if a2 then
+      mark("bags")
+      if bankOpen then mark("bank") end
+      if mailOpen then mark("mail") end
+    end
   end
 end)
 

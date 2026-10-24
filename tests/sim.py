@@ -1,21 +1,36 @@
-"""Runs BankLedger.lua against a stubbed WoW 1.12 API (lupa) and checks the report pages.
+"""Runs BankLedger.lua against a stubbed WoW API (lupa) and checks the report pages, twice:
+as the 1.12 client (Lua 5.0 style globals; run on Lua 5.5 with shims) and as the 1.14 client
+(real Lua 5.1, handler arguments, newer return values and links, mail attachment indexes).
 
-usage: python tests/sim.py [--print] [--dump pages.json]     (needs `pip install lupa`)
+usage: python tests/sim.py [--print] [--dump pages.json] [--only 1.12|1.14]   (needs `pip install lupa`)
 """
 import json
 import os
+import re
 import sys
 
-import lupa
+from lupa import lua51, lua55
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ADDON = os.path.join(HERE, "..", "BankLedger", "BankLedger.lua")
 
 STUB = r'''
-table.getn = function(t) return #t end
-math.mod = math.fmod
-math.atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
-getglobal = function(n) return _G[n] end
+local _G = _G                            -- the stub keeps it; the 1.12 addon must not (see the end)
+if MODERN_SIM then
+  math.mod, getglobal = nil, nil          -- gone in the 1.14 client
+  function GetBuildInfo() return "1.14.2", "42597", "Mar 2022", 11402 end
+  function hooksecurefunc(name, fn)
+    local orig = _G[name]
+    _G[name] = function(...) local r = orig(...); fn(...); return r end
+  end
+  BackdropTemplateMixin = {}
+else
+  table.getn = function(t) return #t end
+  math.mod = math.fmod
+  math.atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
+  getglobal = function(n) return _G[n] end
+  function GetBuildInfo() return "1.12.1", "5875", "Sep 19 2006" end
+end
 UISpecialFrames = {}
 GameTooltip = setmetatable({}, { __index = function() return function() end end })
 GetCursorPosition = function() return 0, 0 end
@@ -54,6 +69,9 @@ Minimap.GetCenter = function() return 100, 100 end
 Minimap.GetEffectiveScale = function() return 1 end
 CreateFrame = function(kind, name, parent, template)
   local f = newFrame(kind, name)
+  if MODERN_SIM and kind == "Frame" and template ~= "BackdropTemplate" then
+    f.SetBackdrop = function() error("SetBackdrop needs BackdropTemplate in 1.14") end
+  end
   if kind == "GameTooltip" then
     f.lines = {}
     f.NumLines = function(self) return #self.lines end
@@ -66,19 +84,28 @@ CreateFrame = function(kind, name, parent, template)
     end
     f.SetBagItem = function(self, bag, slot) local it = BAGS[bag] and BAGS[bag][slot]; fill(self, it and it.tip) end
     f.SetInventoryItem = function(self, unit, inv) local it = BAGS[-1][inv - 39]; fill(self, it and it.tip) end
-    f.SetInboxItem = function(self, i) local m = MAILS[i]; fill(self, m and m.tip) end
+    f.SetInboxItem = function(self, i, a) local m = MAILS[i]; fill(self, m and (a or 1) == 1 and m.tip) end
   end
   return f
 end
 
-ITEMS = {}  -- id -> { name, quality, type, subtype, equipLoc }
+ITEMS = {}  -- id -> { name, quality, type, subtype, equipLoc, lazy = not in the client cache yet }
+LOADED = {}
 function GetItemInfo(s)
-  local id = tonumber(string.match(s, "item:(%d+)"))
+  local id = type(s) == "number" and s or tonumber(string.match(s, "item:(%d+)"))
   local i = ITEMS[id]
-  if not i then return nil end
+  if not i or (i.lazy and not LOADED[id]) then return nil end
+  -- 1.14 has the item level before the required level
+  if MODERN_SIM then return i[1], "link", i[2], 50, 0, i[3], i[4], 20, i[5] or "", "tex" end
   return i[1], s, i[2], 0, i[3], i[4], 20, i[5] or "", "tex"
 end
-function link(id) return "|cffffffff|Hitem:" .. id .. ":0:0:0|h[" .. ITEMS[id][1] .. "]|h|r" end
+function itemLink(id, name, suffix)
+  if MODERN_SIM then
+    return "|cffffffff|Hitem:" .. id .. "::::::" .. (suffix or "") .. ":60:::::|h[" .. name .. "]|h|r"
+  end
+  return "|cffffffff|Hitem:" .. id .. ":0:" .. (suffix or 0) .. ":0|h[" .. name .. "]|h|r"
+end
+function link(id) return itemLink(id, ITEMS[id][1]) end
 
 BAGS = { [0] = {}, {}, {}, {}, {}, [-1] = {}, [5] = {}, [6] = {} }
 BANK_OPEN = false
@@ -110,20 +137,36 @@ MAILS = {}
 function GetInboxNumItems() return #MAILS end
 function GetInboxHeaderInfo(i)
   local m = MAILS[i]
+  if MODERN_SIM then return "pkg", "st", m.from, "subj", m.money or 0, 0, m.days or 30, m.item and 1 or nil end
   return "pkg", "st", m.from, "subj", m.money or 0, 0, m.days or 30, m.item ~= nil
 end
-function GetInboxItem(i)
+function GetInboxItem(i, a)
   local m = MAILS[i]
   if not m.item then return nil end
+  if MODERN_SIM then
+    if a ~= 1 then return nil end
+    return m.item, m.id, "tex", m.c, 1, 1
+  end
   return m.item, "tex", m.c, 1, 1
 end
+if MODERN_SIM then
+  function GetInboxItemLink(i, a)
+    local m = MAILS[i]
+    if a == 1 and m.id then return itemLink(m.id, m.item, m.suffix) end
+  end
+end
 TAKEN = {}
-function TakeInboxItem(i) table.insert(TAKEN, i) end
+function TakeInboxItem(i, a) table.insert(TAKEN, i) end
 function TakeInboxMoney(i) table.insert(TAKEN, -i) end
 SEND = nil
 function SendMail(to, subj, body) SENT_TO = to end
-function GetSendMailItem() if SEND then return SEND[1], "tex", SEND[2], 1 end end
-function GetSendMailMoney() return 0 end
+function GetSendMailItem(a)
+  if not SEND then return end
+  if MODERN_SIM then if a == 1 then return SEND[1], 0, "tex", SEND[2], 1 end return end
+  return SEND[1], "tex", SEND[2], 1
+end
+SEND_MONEY = 0
+function GetSendMailMoney() return SEND_MONEY end
 TRADE_WITH = nil
 TRADE_GIVE, TRADE_GET = {}, {}
 function GetTradePlayerItemInfo(i) local e = TRADE_GIVE[i]; if e then return e[1], "tex", e[2] end end
@@ -133,10 +176,16 @@ function GetTargetTradeMoney() return 0 end
 SlashCmdList = {}
 
 function fire(ev, a1, a2)
+  -- 1.14 UI_INFO_MESSAGE carries the message type first
+  if MODERN_SIM and ev == "UI_INFO_MESSAGE" then a1, a2 = 0, a1 end
   for _, f in ipairs(FRAMES) do
     if f.events[ev] and f.scripts.OnEvent then
-      this, event, arg1, arg2 = f, ev, a1, a2
-      f.scripts.OnEvent()
+      if MODERN_SIM then
+        f.scripts.OnEvent(f, ev, a1, a2)
+      else
+        this, event, arg1, arg2 = f, ev, a1, a2
+        f.scripts.OnEvent()
+      end
     end
   end
 end
@@ -145,13 +194,16 @@ function tick(sec)
     CLOCK = CLOCK + 0.25
     for _, f in ipairs(FRAMES) do
       if f.scripts.OnUpdate and f.kind == "Frame" and f.events.PLAYER_LOGIN then
-        this, arg1 = f, 0.25
-        f.scripts.OnUpdate()
+        if MODERN_SIM then f.scripts.OnUpdate(f, 0.25) else this, arg1 = f, 0.25; f.scripts.OnUpdate() end
       end
     end
   end
 end
 function slash(msg) SlashCmdList.BANKLEDGER(msg) end
+if not MODERN_SIM then
+  getfenv = function() return _G end
+  _G._G = nil                            -- not there in the 1.12 client
+end
 '''
 
 SCENARIO = r'''
@@ -185,7 +237,12 @@ it(14046, "Runecloth Bag", 2, "Container", "Bag", "INVTYPE_BAG")
 -- pfQuest's item names (id -> name), used for mail attachments that have no link in 1.12
 it(8394, "Basilisk Brain", 1, "Trade Goods", "Trade Goods")
 it(10061, "Duskwoven Turban", 2, "Armor", "Cloth", "INVTYPE_HEAD")
-pfDB = { items = { enUS = { [8394] = "Basilisk Brain", [10061] = "Duskwoven Turban" } } }
+if not MODERN_SIM then   -- 1.14 mail has item links, no lookup needed
+  pfDB = { items = { enUS = { [8394] = "Basilisk Brain", [10061] = "Duskwoven Turban" } } }
+end
+-- an item the 1.14 client has not loaded yet: GetItemInfo is nil until GET_ITEM_INFO_RECEIVED
+it(7080, "Essence of Water", 2, "Trade Goods", "Trade Goods")
+ITEMS[7080].lazy = true
 
 -- bags: some stock plus a hearthstone and a soulbound weapon that must not be listed
 put(0, 1, 6948, 1)
@@ -193,8 +250,16 @@ put(0, 2, 7076, 4)
 put(0, 3, 18803, 1)
 put(0, 4, 2915, 1)
 put(1, 1, 7068, 6)
+put(1, 3, 7080, 3)
 fire("PLAYER_LOGIN")
 tick(1)
+LOGIN_EARLY = BankLedgerDB.info["7076:0"] ~= nil   -- 1.14 waits 3 s before the first scan
+tick(3)
+LAZY_BEFORE = BankLedgerDB.info["7080:0"].t
+LOADED[7080] = true
+if MODERN_SIM then fire("GET_ITEM_INFO_RECEIVED", 7080, true) else fire("BAG_UPDATE", 1) end
+tick(1)
+LAZY_AFTER = BankLedgerDB.info["7080:0"].t
 
 -- bank visit: lots of recipes to force page splits
 put(-1, 1, 14637, 1)
@@ -225,10 +290,10 @@ slash("mark")
 
 -- after the post: mail from a player with an item, an AH sale with money, one unknown item
 MAILS = {
-  { from = "Aldren", item = "Heart of Fire", c = 2, tip = { "Heart of Fire" } },
+  { from = "Aldren", item = "Heart of Fire", id = 7077, c = 2, tip = { "Heart of Fire" } },
   { from = "Auction House", money = 50000 },
-  { from = "Brisa", item = "Basilisk Brain", c = 2, tip = { "Basilisk Brain" } },
-  { from = "Brisa", item = "Duskwoven Turban of Fiery Wrath", c = 1,
+  { from = "Brisa", item = "Basilisk Brain", id = 8394, c = 2, tip = { "Basilisk Brain" } },
+  { from = "Brisa", item = "Duskwoven Turban of Fiery Wrath", id = 10061, suffix = 1234, c = 1,
     tip = { "Duskwoven Turban of Fiery Wrath", "Head Cloth", "+11 Fire Spell Damage", "Requires Level 48" } },
   { from = "Corwyn", item = "Pattern: Mooncloth Robe", c = 1, days = 2,
     tip = { "Pattern: Mooncloth Robe", "Requires Tailoring (285)" } },
@@ -237,7 +302,7 @@ fire("MAIL_SHOW")
 fire("MAIL_INBOX_UPDATE")
 tick(1)
 MAIL_PAGES_BEFORE_TAKE = true
-TakeInboxItem(1)
+TakeInboxItem(1, 1)
 put(1, 2, 7077, 2)          -- the attachment lands in the bags
 table.remove(MAILS, 1)
 fire("BAG_UPDATE", 1)
@@ -252,7 +317,9 @@ tick(1)
 
 -- send a request out by mail
 SEND = { "Taran Icebreaker", 1 }
+SEND_MONEY = 1
 SendMail("Dunmar", "", "")
+SEND_MONEY = 0
 BAGS[0][4] = nil
 SEND = nil
 fire("MAIL_SEND_SUCCESS")
@@ -277,8 +344,25 @@ fire("PLAYER_LOGOUT")
 '''
 
 
-def main():
-    rt = lupa.LuaRuntime(unpack_returned_tuples=True)
+def lua50_lint(src):
+    """The 1.12 client is Lua 5.0: no #, no %, no ..., no select/gmatch. Checked outside strings and comments."""
+    code = re.sub(r"--\[\[.*?\]\]", "", src, flags=re.S)
+    code = re.sub(r"\[\[.*?\]\]", '""', code, flags=re.S)
+    code = re.sub(r'"(\\.|[^"\\])*"' + r"|'(\\.|[^'\\])*'", '""', code)
+    code = re.sub(r"--[^\n]*", "", code)
+    bad = []
+    for n, line in enumerate(code.split("\n"), 1):
+        for tok in ("#", "%", "...", "select(", "gmatch", "goto "):
+            if tok in line:
+                bad.append(f"line {n}: {tok}")
+    return bad
+
+
+def run(flavour):
+    print(f"--- {flavour} client")
+    modern = flavour == "1.14"
+    rt = (lua51 if modern else lua55).LuaRuntime(unpack_returned_tuples=True)
+    rt.globals().MODERN_SIM = modern
     rt.execute(STUB)
     with open(ADDON) as f:
         rt.execute(f.read())
@@ -301,7 +385,14 @@ def main():
         print(("ok   " if cond else "FAIL ") + what)
         ok = ok and cond
 
+    if not modern:
+        bad = lua50_lint(open(ADDON).read())
+        check(not bad, "addon source stays Lua 5.0 %s" % bad[:5])
     check(all(len(p) <= 2000 for p in pages), "every page fits a Discord message (%s)" % [len(p) for p in pages])
+    check(g.LOGIN_EARLY == (not modern), "first scan right after login on 1.12, 3 s later on 1.14")
+    if modern:
+        check(g.LAZY_BEFORE is None and g.LAZY_AFTER == "Trade Goods", "item info that arrives later is picked up")
+    check("Essence of Water x3" in text.split("**WEAPONS")[0], "late item listed under trade goods")
     check("Hearthstone" not in text, "hearthstone hidden")
     check("Finkle" not in text, "soulbound item skipped")
     check("Essence of Earth x10" in text, "bags + bank merged (4 + 6)")
@@ -326,7 +417,9 @@ def main():
     check(("IN", "mail", "Auction House", None, None, 50000) in dirs, "ledger: money in")
     check(("OUT", "mail", "Dunmar", "Taran Icebreaker", 1, None) in dirs, "ledger: mail out")
     check(("IN", "trade", "Elwyn", "Elemental Fire", 5, None) in dirs, "ledger: trade in")
-    check(len(dirs) == 4, "no duplicate ledger entries (%d)" % len(dirs))
+    check(("OUT", "mail", "Dunmar", None, None, 1) in dirs, "ledger: money out")
+    check(len(dirs) == 5, "no duplicate ledger entries (%d)" % len(dirs))
+    check("OUT to Dunmar (mail): 1c" in text and "144g 52s" in text, "copper shown only under a gold")
     rt.execute('slash("style inline")')
     rt.execute('fire("PLAYER_LOGOUT")')
     inl = "\n".join(cdb.pages[i] for i in range(1, len(cdb.pages) + 1))
@@ -343,7 +436,7 @@ def main():
     check("- [Enchant Chest - Greater Stats](<https://www.wowhead.com/classic/item=20025>) (300)" in lt, "recipe link")
     check("[Mooncloth Robe]" not in lt and "- Mooncloth Robe (285)" in lt, "mail item without id stays plain")
     check("- [Basilisk Brain](<https://www.wowhead.com/classic/item=8394>) x2" in lt.split("**WEAPONS")[0],
-          "mail item linked via pfQuest, trade goods")
+          "mail item linked (1.14: mail link, 1.12: pfQuest), trade goods")
     check("- [Duskwoven Turban of Fiery Wrath](<https://www.wowhead.com/classic/item=10061>) (lvl 48 cloth head, fire dmg)" in lt,
           "mail suffix item linked to base item, stats from the mail tooltip")
     check(all(len(p) <= 2000 for p in lp), "linked pages still fit (%s)" % [len(p) for p in lp])
@@ -362,9 +455,15 @@ def main():
     check(g.INLINE_AFTER == "inline" and g.WINDOW_TEXT.startswith("**TRADE GOODS**\n"),
           "minimap button opens the window, checkbox switches style")
     check(g.BankLedgerDB.opt.mmAngle is not None, "minimap button drag stores its angle")
-    if "--dump" in sys.argv:   # pages with wowhead links, as input for poster/bank_post.py --pages
+    if "--dump" in sys.argv and not modern:   # pages with wowhead links, for poster/bank_post.py --pages
         json.dump(lp, open(sys.argv[sys.argv.index("--dump") + 1], "w"), indent=1)
-    sys.exit(0 if ok else 1)
+    return ok
+
+
+def main():
+    only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
+    results = [run(f) for f in ("1.12", "1.14") if only in (None, f)]
+    sys.exit(0 if all(results) else 1)
 
 
 main()

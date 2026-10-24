@@ -35,7 +35,8 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import luaparse  # noqa: E402
 
-# the game folder (the one with WTF in it); --wow or $BANKLEDGER_WOW override it
+# the game folder (the one with WTF in it, or for the 1.14 client "World of Warcraft" with
+# _classic_era_/WTF); --wow or $BANKLEDGER_WOW override it
 WOW = os.environ.get("BANKLEDGER_WOW", "" if os.name == "nt" else "/LINUX_DATA/Games/WoW Vanilla")
 if os.name == "nt":
     CONF = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "BankLedger")
@@ -56,8 +57,15 @@ def webhook_url():
     return url
 
 
+WTF_DIRS = ("WTF", "_classic_era_/WTF")
+
+
+def has_wtf(folder):
+    return any(os.path.isdir(os.path.join(folder, d)) for d in WTF_DIRS)
+
+
 def saved_variables():
-    return glob.glob(os.path.join(WOW, "WTF/Account/*/SavedVariables/BankLedger.lua"))
+    return [p for d in WTF_DIRS for p in glob.glob(os.path.join(WOW, d, "Account/*/SavedVariables/BankLedger.lua"))]
 
 
 def load_all():
@@ -66,7 +74,8 @@ def load_all():
     for path in saved_variables():
         db = luaparse.parse_file(path).get("BankLedgerDB") or {}
         for cid, c in (db.get("chars") or {}).items():
-            if c.get("pages"):
+            # the same character in two accounts or clients: the newest save wins
+            if c.get("pages") and c.get("pagesT", 0) >= out.get(cid, (0, 0, -1))[2]:
                 pages = [c["pages"][i] for i in sorted(c["pages"])]
                 out[cid] = (c.get("name") or cid.split(":")[-1], pages, c.get("pagesT", 0))
     return out
@@ -212,7 +221,7 @@ def main():
     ap.add_argument("--list", action="store_true", help="list characters with saved pages and exit")
     ap.add_argument("--skip", action="append", default=[], help='leave out pages whose title starts with this, e.g. "NEW IN"')
     ap.add_argument("--no-label", action="store_true", help="no character name in headings, even with several characters")
-    ap.add_argument("--wow", help=f"game folder containing WTF (default {WOW})")
+    ap.add_argument("--wow", help=f"game folder containing WTF or _classic_era_/WTF (default {WOW})")
     ap.add_argument("--pages", help="JSON list of page texts instead of SavedVariables (tests)")
     ap.add_argument("--dry-run", action="store_true", help="show what would be posted, touch nothing")
     ap.add_argument("--watch", action="store_true", help="keep running and post whenever the game saves")

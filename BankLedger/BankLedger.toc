@@ -1,0 +1,6 @@
+## Interface: 11200
+## Title: BankLedger
+## Notes: Guild bank alt inventory for Discord: scans bags, bank and mailbox, keeps an in/out ledger of mail and trades, and builds copy-paste pages (one per category, under Discord's 2000 character limit). /bl
+## Version: 1.0
+## SavedVariables: BankLedgerDB
+BankLedger.lua

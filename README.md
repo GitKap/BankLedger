@@ -4,6 +4,10 @@ WoW 1.12 (Kronos) addon for a guild bank alt. It reads bags, bank and mailbox an
 Discord-ready text, one page per category, each under Discord's 2000 character limit. It also keeps a
 ledger of mail and trades, so it can list what is new since the last post and who donated.
 
+What the pages look like once pasted into Discord (with `/bl links on`, item names link to wowhead):
+
+<img src="docs/bankledger-trade-goods.png" width="420"> <img src="docs/bankledger-gear-recipes.png" width="420">
+
 ## Bank alt workflow
 
 1. Install the `BankLedger` folder in `Interface/AddOns` and restart the game.

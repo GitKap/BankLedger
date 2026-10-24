@@ -14,8 +14,11 @@ ADDON = os.path.join(HERE, "..", "BankLedger", "BankLedger.lua")
 STUB = r'''
 table.getn = function(t) return #t end
 math.mod = math.fmod
+math.atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
 getglobal = function(n) return _G[n] end
 UISpecialFrames = {}
+GameTooltip = setmetatable({}, { __index = function() return function() end end })
+GetCursorPosition = function() return 0, 0 end
 CHAT = {}
 DEFAULT_CHAT_FRAME = { AddMessage = function(self, m) table.insert(CHAT, m) end }
 ITEM_SOULBOUND = "Soulbound"
@@ -39,10 +42,16 @@ local function newFrame(kind, name)
   f.SetText = function(self, t) self.text = t end
   f.GetText = function(self) return self.text end
   f.CreateFontString = function(self) return newFrame("FontString") end
+  f.CreateTexture = function(self) return newFrame("Texture") end
+  f.SetChecked = function(self, v) self.checked = v end
+  f.GetChecked = function(self) return self.checked end
   if name then _G[name] = f end
   table.insert(FRAMES, f)
   return f
 end
+Minimap = newFrame("Frame", "Minimap")
+Minimap.GetCenter = function() return 100, 100 end
+Minimap.GetEffectiveScale = function() return 1 end
 CreateFrame = function(kind, name, parent, template)
   local f = newFrame(kind, name)
   if kind == "GameTooltip" then
@@ -340,6 +349,19 @@ def main():
     check(all(len(p) <= 2000 for p in lp), "linked pages still fit (%s)" % [len(p) for p in lp])
     if "--print" in sys.argv:
         print("\n".join(p for p in lp if p.startswith(("**WEAPONS", "**TRADE"))))
+    rt.execute('''
+      slash("style list"); slash("links off")
+      BankLedgerMinimapButton.scripts.OnClick()            -- open the window the way a player would
+      local cb = BankLedgerOptInline
+      this = cb; cb:SetChecked(1); cb.scripts.OnClick()       -- tick "Compact"
+      WINDOW_TEXT = BankLedgerEdit:GetText()
+      INLINE_AFTER = BankLedgerDB.opt.style
+      this = BankLedgerMinimapButton; BankLedgerMinimapButton.scripts.OnDragStart()
+      BankLedgerMinimapButton.scripts.OnUpdate()
+    ''')
+    check(g.INLINE_AFTER == "inline" and g.WINDOW_TEXT.startswith("**TRADE GOODS**\n"),
+          "minimap button opens the window, checkbox switches style")
+    check(g.BankLedgerDB.opt.mmAngle is not None, "minimap button drag stores its angle")
     if "--dump" in sys.argv:   # pages with wowhead links, as input for poster/bank_post.py --pages
         json.dump(lp, open(sys.argv[sys.argv.index("--dump") + 1], "w"), indent=1)
     sys.exit(0 if ok else 1)

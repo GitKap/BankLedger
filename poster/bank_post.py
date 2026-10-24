@@ -36,8 +36,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import luaparse  # noqa: E402
 
 # the game folder (the one with WTF in it); --wow or $BANKLEDGER_WOW override it
-WOW = os.environ.get("BANKLEDGER_WOW", "/LINUX_DATA/Games/WoW Vanilla")
-CONF = os.path.expanduser("~/.config/bankledger")
+WOW = os.environ.get("BANKLEDGER_WOW", "" if os.name == "nt" else "/LINUX_DATA/Games/WoW Vanilla")
+if os.name == "nt":
+    CONF = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "BankLedger")
+else:
+    CONF = os.path.expanduser("~/.config/bankledger")
 UA = "DiscordBot (https://github.com/bankledger, 1.0)"
 
 

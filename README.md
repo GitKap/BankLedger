@@ -10,12 +10,14 @@ What the pages look like once pasted into Discord (with `/bl links on`, item nam
 
 ## Bank alt workflow
 
-1. On GitHub: Code → Download ZIP. The ZIP holds a `BankLedger-main` folder; copy the `BankLedger` folder
-   **inside it** (the one with `BankLedger.toc`) to `Interface/AddOns`, so you get
-   `Interface/AddOns/BankLedger/BankLedger.toc`. Restart the game (a /reload does not load new addons).
+1. Download `BankLedger-addon.zip` from the [latest release](https://github.com/GitKap/BankLedger/releases/latest)
+   and unpack it into `Interface/AddOns`, so you get `Interface/AddOns/BankLedger/BankLedger.toc`.
+   Restart the game (a /reload does not load new addons).
 2. Log in on the bank alt. Open the bank once and the mailbox once, so both are scanned.
-3. `/bl` opens the report. Each page is selected already: Ctrl+C, then paste it into that category's
-   Discord message (edit the message). Use `< Prev` / `Next >` to move between pages.
+3. Click the bag button on the minimap (or type `/bl`) to open the report. Each page is selected already: Ctrl+C, then paste it into that category's
+   Discord message (edit the message). Use `< Prev` / `Next >` to move between pages. The tick boxes under
+   the text switch wowhead links, a compact comma-separated layout, counting unopened mail and the
+   "Updated" line; no commands needed.
 4. After updating Discord, click **Mark posted** (or `/bl mark`). The "New in the guild bank" page then
    counts from that moment and thanks everyone who mailed or traded items in.
 
@@ -36,6 +38,7 @@ Other, Gold, New in the guild bank, and an officer-only Ledger.
 | `/bl links on\|off` | wowhead links on item names (longer pages) |
 | `/bl stamp on\|off` | "Updated <date>" line under each page |
 | `/bl mail on\|off` | count unopened mail attachments as stock |
+| `/bl minimap on\|off` | show or hide the minimap button |
 | `/bl off` / `/bl on` | disable on this character |
 
 ## Notes
@@ -47,6 +50,16 @@ Other, Gold, New in the guild bank, and an officer-only Ledger.
 - Tests: `.venv/bin/python tests/sim.py [--print] [--dump pages.json]` runs the addon against a stubbed 1.12 API (`python3 -m venv .venv && .venv/bin/pip install lupa`).
 
 ## Discord webhook poster (optional)
+
+Instead of copy-paste, the poster keeps the channel up to date by itself: after every `/reload` or logout
+it edits the messages whose content changed. Two ways to run it:
+
+- **Windows, no Python:** `BankLedgerPoster.exe` from the [latest release](https://github.com/GitKap/BankLedger/releases/latest).
+  Pick the WoW folder, paste the webhook URL, tick the bank character, then Preview / Post now / Start watching.
+  Settings are kept in `%APPDATA%\BankLedger`. The exe is built by GitHub Actions from this repository
+  (`.github/workflows/release.yml`); it is not code-signed, so Windows SmartScreen may warn the first time
+  ("More info" → "Run anyway").
+- **Python 3:** `python poster/bank_gui.py` (the same window) or the command line below.
 
 `poster/bank_post.py` posts the pages to a channel through a webhook: one message per category, edited in
 place on later runs (only changed pages), reposted in order when the set of pages changes. The addon writes

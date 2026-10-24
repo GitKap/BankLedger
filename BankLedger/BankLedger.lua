@@ -696,10 +696,29 @@ local function button(parent, text, w, point, x, y, onClick)
   return b
 end
 
+-- a checkbox bound to db.opt[key]; get/set translate when the stored value is not a plain boolean
+local function checkbox(name, text, x, get, set)
+  local cb = CreateFrame("CheckButton", name, win, "UICheckButtonTemplate")
+  cb:SetWidth(24)
+  cb:SetHeight(24)
+  cb:SetPoint("BOTTOMLEFT", win, "BOTTOMLEFT", x, 44)
+  local label = win:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  label:SetPoint("LEFT", cb, "RIGHT", 0, 1)
+  label:SetText(text)
+  cb:SetScript("OnShow", function() this:SetChecked(get()) end)
+  cb:SetScript("OnClick", function()
+    set(this:GetChecked() and true or false)
+    pages = buildPages()
+    showPage()
+  end)
+  cb:SetChecked(get())
+  return cb
+end
+
 local function makeWindow()
   win = CreateFrame("Frame", "BankLedgerWindow", UIParent)
   win:SetWidth(620)
-  win:SetHeight(470)
+  win:SetHeight(500)
   win:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
   win:SetFrameStrata("DIALOG")
   win:SetBackdrop({
@@ -727,7 +746,7 @@ local function makeWindow()
 
   local scroll = CreateFrame("ScrollFrame", "BankLedgerScroll", win, "UIPanelScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", win, "TOPLEFT", 22, -60)
-  scroll:SetPoint("BOTTOMRIGHT", win, "BOTTOMRIGHT", -42, 48)
+  scroll:SetPoint("BOTTOMRIGHT", win, "BOTTOMRIGHT", -42, 76)
 
   edit = CreateFrame("EditBox", "BankLedgerEdit", scroll)
   edit:SetMultiLine(true)
@@ -760,6 +779,14 @@ local function makeWindow()
     dirty.bags, dirty.bank, dirty.mail, wait = true, true, true, 0
   end)
   button(win, "Mark posted", 110, "BOTTOMRIGHT", -100, 18, function() markPosted() end)
+  checkbox("BankLedgerOptLinks", "Wowhead links", 20,
+    function() return db.opt.links end, function(v) db.opt.links = v end)
+  checkbox("BankLedgerOptInline", "Compact (comma-separated)", 150,
+    function() return db.opt.style == "inline" end, function(v) db.opt.style = v and "inline" or "list" end)
+  checkbox("BankLedgerOptMail", "Count unopened mail", 340,
+    function() return db.opt.mail ~= false end, function(v) db.opt.mail = v end)
+  checkbox("BankLedgerOptStamp", "\"Updated\" line", 490,
+    function() return db.opt.stamp ~= false end, function(v) db.opt.stamp = v end)
   win:Hide()
 end
 
@@ -783,7 +810,61 @@ local function openReport(at)
   showPage()
 end
 
+-- ---------- minimap button ----------
+local mmButton
+
+local function placeMinimapButton()
+  local a = math.rad(db.opt.mmAngle or 200)
+  mmButton:ClearAllPoints()
+  mmButton:SetPoint("TOPLEFT", Minimap, "TOPLEFT", 52 - 80 * math.cos(a), 80 * math.sin(a) - 52)
+end
+
+local function makeMinimapButton()
+  mmButton = CreateFrame("Button", "BankLedgerMinimapButton", Minimap)
+  mmButton:SetWidth(31)
+  mmButton:SetHeight(31)
+  mmButton:SetFrameStrata("MEDIUM")
+  mmButton:SetFrameLevel(8)
+  mmButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+  local icon = mmButton:CreateTexture(nil, "BACKGROUND")
+  icon:SetTexture("Interface\\Icons\\INV_Misc_Bag_10")
+  icon:SetWidth(20)
+  icon:SetHeight(20)
+  icon:SetPoint("TOPLEFT", mmButton, "TOPLEFT", 7, -5)
+  local border = mmButton:CreateTexture(nil, "OVERLAY")
+  border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+  border:SetWidth(53)
+  border:SetHeight(53)
+  border:SetPoint("TOPLEFT", mmButton, "TOPLEFT", 0, 0)
+  mmButton:RegisterForDrag("LeftButton")
+  mmButton:SetScript("OnClick", function()
+    if win and win:IsVisible() then win:Hide() else openReport() end
+  end)
+  mmButton:SetScript("OnDragStart", function()
+    this:SetScript("OnUpdate", function()
+      local mx, my = Minimap:GetCenter()
+      local px, py = GetCursorPosition()
+      local sc = Minimap:GetEffectiveScale()
+      db.opt.mmAngle = math.deg(math.atan2(py / sc - my, px / sc - mx))
+      placeMinimapButton()
+    end)
+  end)
+  mmButton:SetScript("OnDragStop", function() this:SetScript("OnUpdate", nil) end)
+  mmButton:SetScript("OnEnter", function()
+    GameTooltip:SetOwner(this, "ANCHOR_LEFT")
+    GameTooltip:AddLine("BankLedger")
+    GameTooltip:AddLine("Click: bank pages for Discord", 1, 1, 1)
+    GameTooltip:AddLine("Drag: move this button", 1, 1, 1)
+    GameTooltip:Show()
+  end)
+  mmButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  placeMinimapButton()
+  if db.opt.minimap == false then mmButton:Hide() end
+end
+
 -- ---------- events ----------
+local hinted = false
+
 local function rescan()
   if dirty.bags then scanBags() end
   if dirty.bank then scanBank() end
@@ -854,6 +935,7 @@ ev:SetScript("OnEvent", function()
     cdb = db.chars[id]
     cdb.name = UnitName("player")
     cdb.log = cdb.log or {}
+    makeMinimapButton()
     mark("bags")
     return
   end
@@ -873,6 +955,10 @@ ev:SetScript("OnEvent", function()
     end
     cdb.money = GetMoney()
   elseif event == "BANKFRAME_OPENED" then
+    if not hinted then
+      hinted = true
+      say("bank scanned. Click the bag button on the minimap (or type /bl) for the Discord pages.")
+    end
     bankOpen = true
     mark("bank")
     mark("bags")
@@ -953,6 +1039,10 @@ SlashCmdList["BANKLEDGER"] = function(msg)
     if rest ~= "on" and rest ~= "off" then say("usage: /bl " .. cmd .. " on|off") return end
     db.opt[cmd] = rest == "on"
     say(cmd .. ": " .. rest)
+  elseif cmd == "minimap" then
+    if rest ~= "on" and rest ~= "off" then say("usage: /bl minimap on|off") return end
+    db.opt.minimap = rest == "on"
+    if rest == "on" then mmButton:Show() else mmButton:Hide() end
   elseif cmd == "off" or cmd == "on" then
     cdb.off = cmd == "off"
     say(cmd == "off" and "disabled on this character." or "enabled on this character.")
@@ -966,6 +1056,6 @@ SlashCmdList["BANKLEDGER"] = function(msg)
       (cdb.mark and (" Last post mark " .. date("%d %b %H:%M", cdb.mark.t) .. ".") or ""))
   else
     say("/bl - report window | /bl mark (after posting) | /bl scan | /bl status | /bl cat <item> = CATEGORY | /bl hide|unhide <item>")
-    say("/bl style list|inline | /bl links on|off (wowhead links) | /bl stamp on|off | /bl mail on|off | /bl off|on")
+    say("/bl style list|inline | /bl links on|off (wowhead links) | /bl stamp on|off | /bl mail on|off | /bl minimap on|off | /bl off|on")
   end
 end

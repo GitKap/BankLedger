@@ -1,0 +1,37 @@
+# A tag like v1.2.0 builds the Windows poster (PyInstaller, so no Python needed) and a ZIP of the
+# addon whose top folder is BankLedger/, and attaches both to a GitHub release.
+# A tag with a dash (v1.2.0-rc1) makes a pre-release.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build BankLedgerPoster.exe
+        run: |
+          pip install pyinstaller==6.11.1
+          pyinstaller --onefile --windowed --name BankLedgerPoster --paths poster poster/bank_gui.py
+
+      - name: Zip the addon
+        shell: pwsh
+        run: Compress-Archive -Path BankLedger -DestinationPath BankLedger-addon.zip
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            dist/BankLedgerPoster.exe
+            BankLedger-addon.zip

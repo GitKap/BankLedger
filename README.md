@@ -10,7 +10,9 @@ What the pages look like once pasted into Discord (with `/bl links on`, item nam
 
 ## Bank alt workflow
 
-1. Install the `BankLedger` folder in `Interface/AddOns` and restart the game.
+1. On GitHub: Code → Download ZIP. The ZIP holds a `BankLedger-main` folder; copy the `BankLedger` folder
+   **inside it** (the one with `BankLedger.toc`) to `Interface/AddOns`, so you get
+   `Interface/AddOns/BankLedger/BankLedger.toc`. Restart the game (a /reload does not load new addons).
 2. Log in on the bank alt. Open the bank once and the mailbox once, so both are scanned.
 3. `/bl` opens the report. Each page is selected already: Ctrl+C, then paste it into that category's
    Discord message (edit the message). Use `< Prev` / `Next >` to move between pages.

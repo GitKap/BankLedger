@@ -64,7 +64,10 @@ it edits the messages whose content changed. Two ways to run it:
   Settings are kept in `%APPDATA%\BankLedger`. The exe is built by GitHub Actions from this repository
   (`.github/workflows/release.yml`); it is not code-signed, so Windows SmartScreen may warn the first time
   ("More info" → "Run anyway").
-- **Python 3:** `python poster/bank_gui.py` (the same window) or the command line below.
+- **Python 3:** `python poster/bank_gui.py` (the same window; `pip install -r poster/requirements.txt` adds the
+  dark theme, it works without it) or the command line below.
+
+<img src="docs/bankledger-poster.png" width="520">
 
 `poster/bank_post.py` posts the pages to a channel through a webhook: one message per category, edited in
 place on later runs (only changed pages), reposted in order when the set of pages changes. The addon writes

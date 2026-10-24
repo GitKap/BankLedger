@@ -22,8 +22,8 @@ jobs:
 
       - name: Build BankLedgerPoster.exe
         run: |
-          pip install pyinstaller==6.11.1
-          pyinstaller --onefile --windowed --name BankLedgerPoster --paths poster poster/bank_gui.py
+          pip install pyinstaller==6.11.1 -r poster/requirements.txt
+          pyinstaller --onefile --windowed --name BankLedgerPoster --paths poster --collect-data sv_ttk poster/bank_gui.py
 
       - name: Zip the addon
         shell: pwsh

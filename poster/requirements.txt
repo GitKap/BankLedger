@@ -1,0 +1,1 @@
+sv-ttk==2.6.0   # optional: the dark Windows 11 style theme for bank_gui.py

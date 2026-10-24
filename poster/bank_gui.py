@@ -14,7 +14,12 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font, messagebox, ttk
+
+try:   # Sun Valley theme (Windows 11 look, drawn by Tk itself, so the same everywhere); optional
+    import sv_ttk
+except ImportError:
+    sv_ttk = None
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bank_post as bp  # noqa: E402
@@ -121,52 +126,80 @@ class App:
         self.watching = threading.Event()
         self.char_vars = {}
         root.title("BankLedger poster")
-        root.minsize(620, 520)
+        root.minsize(680, 640)
+        dark = sv_ttk is not None
+        if dark:
+            sv_ttk.set_theme("dark")
+        muted = "#9a9a9a" if dark else "gray"
 
-        pad = {"padx": 8, "pady": 4}
-        top = ttk.Frame(root)
-        top.pack(fill="x", **pad)
-        top.columnconfigure(1, weight=1)
+        outer = ttk.Frame(root, padding=(16, 12))
+        outer.pack(fill="both", expand=True)
+        pad = {"pady": (0, 10)}
 
-        ttk.Label(top, text="WoW folder").grid(row=0, column=0, sticky="w")
+        head = ttk.Frame(outer)
+        head.pack(fill="x", **pad)
+        ttk.Label(head, text="BankLedger poster", font=font.Font(size=16, weight="bold")).pack(anchor="w")
+        ttk.Label(head, foreground=muted,
+                  text="Keeps a Discord channel in sync with your bank character's BankLedger pages.").pack(anchor="w")
+
+        game = ttk.LabelFrame(outer, text=" 1. Game folder ", padding=10)
+        game.pack(fill="x", **pad)
+        game.columnconfigure(0, weight=1)
         self.wow = tk.StringVar(value=self.cfg.get("wow") or bp.WOW)
-        ttk.Entry(top, textvariable=self.wow).grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(top, text="Browse...", command=self.browse).grid(row=0, column=2)
+        ttk.Entry(game, textvariable=self.wow).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        ttk.Button(game, text="Browse...", command=self.browse).grid(row=0, column=1)
+        ttk.Label(game, text="The folder with WoW.exe and the WTF folder.", foreground=muted).grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
-        ttk.Label(top, text="Webhook URL").grid(row=1, column=0, sticky="w")
+        disc = ttk.LabelFrame(outer, text=" 2. Discord webhook ", padding=10)
+        disc.pack(fill="x", **pad)
+        disc.columnconfigure(0, weight=1)
         self.hook = tk.StringVar(value=self.cfg.get("webhook", ""))
-        self.hook_entry = ttk.Entry(top, textvariable=self.hook, show=HIDE)
-        self.hook_entry.grid(row=1, column=1, sticky="ew", padx=4)
+        self.hook_entry = ttk.Entry(disc, textvariable=self.hook, show=HIDE)
+        self.hook_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self.show_hook = tk.BooleanVar(value=False)
-        ttk.Checkbutton(top, text="show", variable=self.show_hook,
+        ttk.Checkbutton(disc, text="Show", variable=self.show_hook,
                         command=lambda: self.hook_entry.config(show="" if self.show_hook.get() else HIDE)
-                        ).grid(row=1, column=2)
-        ttk.Label(top, text=HELP_WEBHOOK, foreground="gray", wraplength=560).grid(
-            row=2, column=0, columnspan=3, sticky="w")
+                        ).grid(row=0, column=1)
+        ttk.Label(disc, text=HELP_WEBHOOK, foreground=muted, wraplength=600).grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
-        box = ttk.LabelFrame(root, text="Characters to publish (only ticked ones are posted)")
+        box = ttk.LabelFrame(outer, text=" 3. Characters to publish ", padding=10)
         box.pack(fill="x", **pad)
+        ttk.Label(box, text="Only ticked characters are posted.", foreground=muted).pack(anchor="w")
         self.char_frame = ttk.Frame(box)
-        self.char_frame.pack(fill="x", padx=6, pady=4)
-        ttk.Button(box, text="Refresh list", command=self.refresh).pack(anchor="w", padx=6, pady=(0, 6))
-
-        opts = ttk.Frame(root)
-        opts.pack(fill="x", **pad)
+        self.char_frame.pack(fill="x", pady=4)
+        opts = ttk.Frame(box)
+        opts.pack(fill="x")
         self.skip_new = tk.BooleanVar(value=self.cfg.get("skip_new", False))
         self.ledger = tk.BooleanVar(value=self.cfg.get("ledger", False))
         ttk.Checkbutton(opts, text='Leave out "New in the guild bank"', variable=self.skip_new).pack(side="left")
-        ttk.Checkbutton(opts, text="Also post the officer LEDGER page", variable=self.ledger).pack(side="left", padx=12)
+        ttk.Checkbutton(opts, text="Also post the officer LEDGER page", variable=self.ledger).pack(side="left", padx=16)
+        ttk.Button(opts, text="Refresh", command=self.refresh).pack(side="right")
 
-        btns = ttk.Frame(root)
+        btns = ttk.Frame(outer)
         btns.pack(fill="x", **pad)
-        ttk.Button(btns, text="Preview", command=lambda: self.start(preview, refresh=True)).pack(side="left")
-        ttk.Button(btns, text="Post now", command=lambda: self.start(post_once, refresh=True)).pack(side="left", padx=6)
+        post = ttk.Button(btns, text="Post now", command=lambda: self.start(post_once, refresh=True))
+        if dark:
+            post.config(style="Accent.TButton")
+        post.pack(side="left")
+        ttk.Button(btns, text="Preview", command=lambda: self.start(preview, refresh=True)).pack(side="left", padx=8)
         self.watch_btn = ttk.Button(btns, text="Start watching", command=self.toggle_watch)
         self.watch_btn.pack(side="left")
-        ttk.Label(btns, text="watching = post after every /reload or logout", foreground="gray").pack(side="left", padx=8)
+        ttk.Label(btns, text="Watching posts after every /reload or logout.", foreground=muted).pack(side="left", padx=12)
 
-        self.log = tk.Text(root, height=14, wrap="word", state="disabled")
-        self.log.pack(fill="both", expand=True, **pad)
+        logf = ttk.Frame(outer)
+        logf.pack(fill="both", expand=True)
+        mono = font.nametofont("TkFixedFont").copy()
+        mono.configure(size=10)
+        self.log = tk.Text(logf, height=12, wrap="word", state="disabled", font=mono, relief="flat",
+                           borderwidth=0, padx=10, pady=8,
+                           background="#1c1c1c" if dark else "white", foreground="#e4e4e4" if dark else "black",
+                           insertbackground="#e4e4e4")
+        sb = ttk.Scrollbar(logf, orient="vertical", command=self.log.yview)
+        self.log.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.log.pack(side="left", fill="both", expand=True)
 
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh()
